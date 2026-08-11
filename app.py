@@ -1,3 +1,4 @@
+app.py
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -5,22 +6,25 @@ import yfinance as yf
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 st.set_page_config(
-    page_title="NSE AI Stock Scanner",
-    page_icon="📈",
+    page_title="NSE FII Momentum Scanner",
+    page_icon="🚀",
     layout="wide"
 )
 
-st.title("NSE AI Stock Scanner")
-st.caption("EMA + MACD + RSI + ROE + FII + DII + 4 Month High")
+st.title("🚀 NSE FII Momentum Scanner")
 
-ROE_MIN = 10.0
+st.write(
+    "10 EMA Cross 50 EMA | Fresh 200 EMA Breakout | "
+    "RSI > 50 | High Momentum | FII > 7%"
+)
+
 FII_MIN = 7.0
-DII_MIN = 45.0
 RSI_MIN = 50.0
+VOLUME_MIN = 1.5
 
 
 @st.cache_data(ttl=86400)
-def get_nse_stocks():
+def get_nse_symbols():
     url = "https://archives.nseindia.com/content/equities/EQUITY_L.csv"
 
     try:
@@ -30,37 +34,37 @@ def get_nse_stocks():
             df["SYMBOL"]
             .dropna()
             .astype(str)
+            .str.upper()
             .str.strip()
             .unique()
             .tolist()
         )
 
     except Exception:
-        return [
-            "RELIANCE",
-            "TCS",
-            "INFY",
-            "HDFCBANK",
-            "ICICIBANK",
-            "SBIN",
-            "LT",
-            "AXISBANK",
-            "KOTAKBANK",
-            "ITC",
-            "BHARTIARTL",
-            "MARUTI",
-            "SUNPHARMA",
-            "M&M",
-            "TATAMOTORS",
-            "TATASTEEL",
-            "HINDALCO",
-            "NTPC",
-            "POWERGRID"
-        ]
+        return []
+
+
+def get_fii_holding(symbol):
+    try:
+        ticker = yf.Ticker(symbol + ".NS")
+        info = ticker.info
+
+        fii = info.get("heldPercentInstitutions")
+
+        if fii is None:
+            return None
+
+        return float(fii) * 100
+
+    except Exception:
+        return None
 
 
 def calculate_indicators(df):
+
     close = df["Close"]
+    high = df["High"]
+    volume = df["Volume"]
 
     df["EMA10"] = close.ewm(
         span=10,
@@ -115,21 +119,19 @@ def calculate_indicators(df):
         100 / (1 + rs)
     )
 
-    df["HIGH_4M"] = (
-        df["High"]
-        .rolling(84)
-        .max()
-    )
+    df["VOL20"] = volume.rolling(20).mean()
+
+    df["HIGH20"] = high.shift(1).rolling(20).max()
 
     return df
 
 
 def scan_stock(symbol):
-    try:
-        ticker = symbol + ".NS"
 
-        df = yf.download(
-            ticker,
+    try:
+
+        data = yf.download(
+            symbol + ".NS",
             period="1y",
             interval="1d",
             auto_adjust=True,
@@ -137,34 +139,89 @@ def scan_stock(symbol):
             threads=False
         )
 
-        if df.empty:
+        if data.empty or len(data) < 210:
             return None
 
-        if isinstance(df.columns, pd.MultiIndex):
-            df.columns = df.columns.get_level_values(0)
+        if isinstance(data.columns, pd.MultiIndex):
+            data.columns = data.columns.get_level_values(0)
 
-        if len(df) < 210:
-            return None
+        data = calculate_indicators(data)
 
-        df = calculate_indicators(df)
-
-        today = df.iloc[-1]
-        yesterday = df.iloc[-2]
+        today = data.iloc[-1]
+        yesterday = data.iloc[-2]
 
         price = float(today["Close"])
         ema10 = float(today["EMA10"])
         ema50 = float(today["EMA50"])
         ema200 = float(today["EMA200"])
         rsi = float(today["RSI"])
+
         macd = float(today["MACD"])
         macd_signal = float(today["MACD_SIGNAL"])
-        high4m = float(today["HIGH_4M"])
+
+        volume = float(today["Volume"])
+        avg_volume = float(today["VOL20"])
+
+        previous_high = float(
+            today["HIGH20"]
+        )
+
+        if avg_volume <= 0:
+            return None
+
+        volume_ratio = volume / avg_volume
 
         ema_cross = (
             yesterday["EMA10"] <= yesterday["EMA50"]
-            and
-            today["EMA10"] > today["EMA50"]
+            and ema10 > ema50
         )
+
+        fresh_200_breakout = (
+            yesterday["Close"] <= yesterday["EMA200"]
+            and price > ema200
+        )
+
+        twenty_day_breakout = (
+            price > previous_high
+        )
+
+        macd_bullish = (
+            macd > macd_signal
+            and macd > 0
+        )
+
+        high_momentum = (
+            price > ema10
+            and rsi >= 55
+            and volume_ratio >= VOLUME_MIN
+            and macd_bullish
+        )
+
+        score = 0
+
+        if ema_cross:
+            score += 25
+
+        if fresh_200_breakout:
+            score += 25
+
+        if rsi > 50:
+            score += 10
+
+        if rsi >= 60:
+            score += 5
+
+        if volume_ratio >= 1.5:
+            score += 15
+
+        if volume_ratio >= 2:
+            score += 5
+
+        if twenty_day_breakout:
+            score += 10
+
+        if macd_bullish:
+            score += 5
 
         return {
             "Symbol": symbol,
@@ -174,130 +231,29 @@ def scan_stock(symbol):
             "EMA200": round(ema200, 2),
             "RSI": round(rsi, 2),
             "MACD": round(macd, 2),
-            "MACD Signal": round(macd_signal, 2),
-            "4M High": round(high4m, 2),
+            "Volume X": round(volume_ratio, 2),
             "EMA Cross": ema_cross,
-            "Above 200 EMA": price > ema200,
-            "MACD Bullish": macd > macd_signal,
-            "RSI > 50": rsi > RSI_MIN,
-            "4M Breakout": price >= high4m * 0.995
+            "200 EMA Breakout": fresh_200_breakout,
+            "20D Breakout": twenty_day_breakout,
+            "MACD Bullish": macd_bullish,
+            "High Momentum": high_momentum,
+            "Momentum Score": score
         }
 
     except Exception:
         return None
 
 
-def calculate_score(row):
-    score = 0
-
-    if row["Above 200 EMA"]:
-        score += 20
-
-    if row["EMA Cross"]:
-        score += 20
-
-    if row["MACD Bullish"]:
-        score += 15
-
-    if row["RSI > 50"]:
-        score += 10
-
-    if row["4M Breakout"]:
-        score += 15
-
-    if row["ROE"] > ROE_MIN:
-        score += 5
-
-    if row["FII Holding"] > FII_MIN:
-        score += 10
-
-    if row["DII Holding"] > DII_MIN:
-        score += 5
-
-    return score
-
-
-st.sidebar.header("Scanner Settings")
-
-roe_min = st.sidebar.number_input(
-    "Minimum ROE",
-    min_value=0.0,
-    value=10.0
-)
-
-fii_min = st.sidebar.number_input(
-    "Minimum FII Holding",
-    min_value=0.0,
-    value=7.0
-)
-
-dii_min = st.sidebar.number_input(
-    "Minimum DII Holding",
-    min_value=0.0,
-    value=45.0
-)
-
-rsi_min = st.sidebar.number_input(
-    "Minimum RSI",
-    min_value=0.0,
-    max_value=100.0,
-    value=50.0
-)
-
-uploaded_file = st.sidebar.file_uploader(
-    "Upload fundamentals CSV",
-    type=["csv"]
-)
-
-run_scanner = st.sidebar.button(
-    "RUN NSE SCANNER",
+if st.button(
+    "🚀 SCAN ALL NSE STOCKS",
     use_container_width=True
-)
+):
 
+    symbols = get_nse_symbols()
 
-fundamentals = None
-
-if uploaded_file is not None:
-    try:
-        fundamentals = pd.read_csv(uploaded_file)
-
-        fundamentals.columns = [
-            str(c).strip().lower()
-            for c in fundamentals.columns
-        ]
-
-        required = [
-            "symbol",
-            "roe",
-            "fii_holding",
-            "dii_holding"
-        ]
-
-        if not all(
-            column in fundamentals.columns
-            for column in required
-        ):
-            st.error(
-                "CSV columns must be: symbol, roe, fii_holding, dii_holding"
-            )
-            fundamentals = None
-
-        else:
-            fundamentals["symbol"] = (
-                fundamentals["symbol"]
-                .astype(str)
-                .str.upper()
-                .str.strip()
-            )
-
-    except Exception as error:
-        st.error(str(error))
-        fundamentals = None
-
-
-if run_scanner:
-
-    symbols = get_nse_stocks()
+    if not symbols:
+        st.error("NSE stock list could not be loaded.")
+        st.stop()
 
     st.info(
         "Scanning " + str(len(symbols)) + " NSE stocks..."
@@ -336,93 +292,113 @@ if run_scanner:
 
     progress.empty()
 
-    technical = pd.DataFrame(results)
+    df = pd.DataFrame(results)
 
-    if technical.empty:
-        st.error("No market data received.")
+    if df.empty:
+        st.warning("No market data received.")
         st.stop()
 
-    if fundamentals is None:
+    st.info(
+        "Checking FII holding..."
+    )
 
-        st.warning(
-            "Upload fundamentals CSV for ROE, FII and DII filtering."
-        )
+    fii_results = []
 
-        technical["ROE"] = 0.0
-        technical["FII Holding"] = 0.0
-        technical["DII Holding"] = 0.0
+    fii_progress = st.progress(0)
 
-        final = technical
+    completed = 0
 
-    else:
+    with ThreadPoolExecutor(
+        max_workers=8
+    ) as executor:
 
-        final = technical.merge(
-            fundamentals,
-            left_on="Symbol",
-            right_on="symbol",
-            how="inner"
-        )
+        futures = {
+            executor.submit(
+                get_fii_holding,
+                symbol
+            ): symbol
+            for symbol in df["Symbol"]
+        }
 
-        final.rename(
-            columns={
-                "roe": "ROE",
-                "fii_holding": "FII Holding",
-                "dii_holding": "DII Holding"
-            },
-            inplace=True
-        )
+        for future in as_completed(futures):
 
-        final.drop(
-            columns=["symbol"],
-            inplace=True,
-            errors="ignore"
-        )
+            symbol = futures[future]
 
-    final = final[
-        (final["Price"] > final["EMA200"]) &
-        (final["EMA Cross"] == True) &
-        (final["MACD Bullish"] == True) &
-        (final["RSI"] > rsi_min) &
-        (final["4M Breakout"] == True) &
-        (final["ROE"] > roe_min) &
-        (final["FII Holding"] > fii_min) &
-        (final["DII Holding"] > dii_min)
+            try:
+                fii = future.result()
+            except Exception:
+                fii = None
+
+            fii_results.append(
+                {
+                    "Symbol": symbol,
+                    "FII Holding": fii
+                }
+            )
+
+            completed += 1
+
+            fii_progress.progress(
+                completed / len(futures)
+            )
+
+    fii_progress.empty()
+
+    fii_df = pd.DataFrame(fii_results)
+
+    df = df.merge(
+        fii_df,
+        on="Symbol",
+        how="left"
+    )
+
+    df["FII Holding"] = pd.to_numeric(
+        df["FII Holding"],
+        errors="coerce"
+    )
+
+    final = df[
+        (df["EMA Cross"] == True)
+        &
+        (df["200 EMA Breakout"] == True)
+        &
+        (df["RSI"] > RSI_MIN)
+        &
+        (df["High Momentum"] == True)
+        &
+        (df["FII Holding"] > FII_MIN)
     ].copy()
+
+    final = final.sort_values(
+        "Momentum Score",
+        ascending=False
+    )
 
     if final.empty:
 
         st.warning(
-            "No stocks match all scanner conditions."
+            "No stocks currently match all conditions."
         )
 
     else:
 
-        final["AI Score"] = final.apply(
-            calculate_score,
-            axis=1
-        )
-
         final["Signal"] = np.select(
             [
-                final["AI Score"] >= 85,
-                final["AI Score"] >= 70,
-                final["AI Score"] >= 55
+                final["Momentum Score"] >= 90,
+                final["Momentum Score"] >= 75,
+                final["Momentum Score"] >= 60
             ],
             [
-                "STRONG BUY",
-                "BUY",
-                "WATCH"
+                "🔥 STRONG MOMENTUM",
+                "🟢 BUY",
+                "🟡 WATCH"
             ],
             default="WEAK"
         )
 
-        final = final.sort_values(
-            "AI Score",
-            ascending=False
-        )
-
         st.success(
-            str(len(final)) + " stocks found"
+            str(len(final)) +
+            " high-momentum stocks found."
         )
 
         columns = [
@@ -433,10 +409,9 @@ if run_scanner:
             "EMA200",
             "RSI",
             "MACD",
-            "ROE",
+            "Volume X",
             "FII Holding",
-            "DII Holding",
-            "AI Score",
+            "Momentum Score",
             "Signal"
         ]
 
@@ -446,14 +421,14 @@ if run_scanner:
             hide_index=True
         )
 
-        csv_data = final[columns].to_csv(
+        csv = final[columns].to_csv(
             index=False
         ).encode("utf-8")
 
         st.download_button(
             "DOWNLOAD RESULTS",
-            data=csv_data,
-            file_name="nse_ai_scanner_results.csv",
+            data=csv,
+            file_name="nse_fii_momentum_scanner.csv",
             mime="text/csv",
             use_container_width=True
         )
@@ -461,5 +436,10 @@ if run_scanner:
 else:
 
     st.info(
-        "Upload fundamentals.csv and click RUN NSE SCANNER."
+        "Press SCAN ALL NSE STOCKS to start."
     )
+requirements.txt
+streamlit
+pandas
+numpy
+yfinance
