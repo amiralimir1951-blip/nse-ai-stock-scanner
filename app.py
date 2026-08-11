@@ -10,20 +10,22 @@ st.set_page_config(
     layout="wide"
 )
 
-st.title("NSE FII Momentum Scanner")
-st.write("10 EMA > 50 EMA | Fresh 200 EMA Breakout | RSI > 50 | High Momentum | FII > 7%")
-
-FII_MIN = 7.0
+st.title("🚀 NSE FII Momentum Scanner")
+st.caption(
+    "10 EMA > 50 EMA | 200 EMA Breakout | RSI > 50 | "
+    "Volume Momentum | MACD | Institutional Holding > 7%"
+)
 
 
 @st.cache_data(ttl=86400)
 def get_nse_symbols():
+
     url = "https://archives.nseindia.com/content/equities/EQUITY_L.csv"
 
     try:
         df = pd.read_csv(url)
 
-        return (
+        symbols = (
             df["SYMBOL"]
             .dropna()
             .astype(str)
@@ -33,27 +35,29 @@ def get_nse_symbols():
             .tolist()
         )
 
+        return symbols
+
     except Exception:
         return []
 
 
-def calculate_indicators(df):
+def indicators(data):
 
-    close = df["Close"]
-    high = df["High"]
-    volume = df["Volume"]
+    close = data["Close"]
+    high = data["High"]
+    volume = data["Volume"]
 
-    df["EMA10"] = close.ewm(
+    data["EMA10"] = close.ewm(
         span=10,
         adjust=False
     ).mean()
 
-    df["EMA50"] = close.ewm(
+    data["EMA50"] = close.ewm(
         span=50,
         adjust=False
     ).mean()
 
-    df["EMA200"] = close.ewm(
+    data["EMA200"] = close.ewm(
         span=200,
         adjust=False
     ).mean()
@@ -68,9 +72,9 @@ def calculate_indicators(df):
         adjust=False
     ).mean()
 
-    df["MACD"] = ema12 - ema26
+    data["MACD"] = ema12 - ema26
 
-    df["MACD_SIGNAL"] = df["MACD"].ewm(
+    data["MACD_SIGNAL"] = data["MACD"].ewm(
         span=9,
         adjust=False
     ).mean()
@@ -92,15 +96,17 @@ def calculate_indicators(df):
 
     rs = avg_gain / avg_loss.replace(0, np.nan)
 
-    df["RSI"] = 100 - (
+    data["RSI"] = 100 - (
         100 / (1 + rs)
     )
 
-    df["VOL20"] = volume.rolling(20).mean()
+    data["VOL20"] = volume.rolling(20).mean()
 
-    df["HIGH20"] = high.shift(1).rolling(20).max()
+    data["HIGH20"] = high.shift(1).rolling(20).max()
 
-    return df
+    data["HIGH52"] = high.rolling(252).max()
+
+    return data
 
 
 def scan_stock(symbol):
@@ -109,7 +115,7 @@ def scan_stock(symbol):
 
         data = yf.download(
             symbol + ".NS",
-            period="1y",
+            period="2y",
             interval="1d",
             auto_adjust=True,
             progress=False,
@@ -119,13 +125,20 @@ def scan_stock(symbol):
         if data.empty or len(data) < 210:
             return None
 
-        if isinstance(data.columns, pd.MultiIndex):
-            data.columns = data.columns.get_level_values(0)
+        if isinstance(
+            data.columns,
+            pd.MultiIndex
+        ):
+            data.columns = (
+                data.columns
+                .get_level_values(0)
+            )
 
-        data = calculate_indicators(data)
+        data = indicators(data)
 
         today = data.iloc[-1]
-        yesterday = data.iloc[-2]
+
+        recent = data.tail(6)
 
         price = float(today["Close"])
         ema10 = float(today["EMA10"])
@@ -134,69 +147,111 @@ def scan_stock(symbol):
         rsi = float(today["RSI"])
 
         macd = float(today["MACD"])
-        macd_signal = float(today["MACD_SIGNAL"])
+        macd_signal = float(
+            today["MACD_SIGNAL"]
+        )
 
         volume = float(today["Volume"])
-        avg_volume = float(today["VOL20"])
+        avg_volume = float(
+            today["VOL20"]
+        )
 
-        previous_high = float(today["HIGH20"])
+        high20 = float(
+            today["HIGH20"]
+        )
+
+        high52 = float(
+            today["HIGH52"]
+        )
 
         if avg_volume <= 0:
             return None
 
-        volume_ratio = volume / avg_volume
+        volume_x = volume / avg_volume
 
-        ema_cross = (
-            yesterday["EMA10"] <= yesterday["EMA50"]
-            and ema10 > ema50
+        cross_recent = False
+
+        for i in range(1, len(recent)):
+
+            previous = recent.iloc[i - 1]
+            current = recent.iloc[i]
+
+            if (
+                previous["EMA10"]
+                <= previous["EMA50"]
+                and
+                current["EMA10"]
+                >
+                current["EMA50"]
+            ):
+                cross_recent = True
+
+        price_above_200 = (
+            price > ema200
         )
 
-        fresh_200_breakout = (
-            yesterday["Close"] <= yesterday["EMA200"]
-            and price > ema200
+        breakout_200 = (
+            price > ema200
+            and
+            price > ema50
         )
 
-        twenty_day_breakout = (
-            price > previous_high
+        fresh_20_breakout = (
+            price > high20
+        )
+
+        rsi_ok = (
+            rsi > 50
+        )
+
+        volume_momentum = (
+            volume_x >= 1.5
         )
 
         macd_bullish = (
             macd > macd_signal
-            and macd > 0
+            and
+            macd > 0
         )
 
-        high_momentum = (
+        strong_momentum = (
             price > ema10
-            and rsi >= 55
-            and volume_ratio >= 1.5
-            and macd_bullish
+            and
+            rsi >= 55
+            and
+            volume_x >= 1.5
+            and
+            macd_bullish
         )
 
         score = 0
 
-        if ema_cross:
+        if cross_recent:
             score += 25
 
-        if fresh_200_breakout:
-            score += 25
+        if breakout_200:
+            score += 20
 
-        if rsi > 50:
+        if fresh_20_breakout:
+            score += 15
+
+        if price_above_200:
+            score += 10
+
+        if rsi_ok:
             score += 10
 
         if rsi >= 60:
             score += 5
 
-        if volume_ratio >= 1.5:
-            score += 15
-
-        if volume_ratio >= 2:
-            score += 5
-
-        if twenty_day_breakout:
+        if volume_x >= 1.5:
             score += 10
 
-        if macd_bullish:
+        if volume_x >= 2:
             score += 5
+
+        if macd_bullish:
+            score += 10
 
         return {
             "Symbol": symbol,
@@ -206,39 +261,51 @@ def scan_stock(symbol):
             "EMA200": round(ema200, 2),
             "RSI": round(rsi, 2),
             "MACD": round(macd, 2),
-            "Volume X": round(volume_ratio, 2),
-            "EMA Cross": ema_cross,
-            "200 EMA Breakout": fresh_200_breakout,
-            "20D Breakout": twenty_day_breakout,
+            "Volume X": round(
+                volume_x,
+                2
+            ),
+            "52W High": round(
+                high52,
+                2
+            ),
+            "EMA Cross Recent": cross_recent,
+            "Above 200 EMA": price_above_200,
+            "20D Breakout": fresh_20_breakout,
             "MACD Bullish": macd_bullish,
-            "High Momentum": high_momentum,
-            "Momentum Score": score
+            "High Momentum": strong_momentum,
+            "Score": score
         }
 
     except Exception:
         return None
 
 
-def get_fii_holding(symbol):
+def get_institutional_holding(symbol):
 
     try:
 
-        ticker = yf.Ticker(symbol + ".NS")
+        ticker = yf.Ticker(
+            symbol + ".NS"
+        )
+
         info = ticker.info
 
-        value = info.get("heldPercentInstitutions")
+        value = info.get(
+            "heldPercentInstitutions"
+        )
 
         if value is None:
-            return None
+            return np.nan
 
         return float(value) * 100
 
     except Exception:
-        return None
+        return np.nan
 
 
 if st.button(
-    "SCAN ALL NSE STOCKS",
+    "🚀 SCAN NSE",
     use_container_width=True
 ):
 
@@ -247,13 +314,15 @@ if st.button(
     if not symbols:
 
         st.error(
-            "Unable to load NSE stock list."
+            "NSE stock list could not be loaded."
         )
 
         st.stop()
 
     st.info(
-        "Scanning " + str(len(symbols)) + " NSE stocks..."
+        "Scanning "
+        + str(len(symbols))
+        + " NSE stocks..."
     )
 
     results = []
@@ -274,7 +343,9 @@ if st.button(
             for symbol in symbols
         }
 
-        for future in as_completed(futures):
+        for future in as_completed(
+            futures
+        ):
 
             result = future.result()
 
@@ -284,26 +355,30 @@ if st.button(
             completed += 1
 
             progress.progress(
-                completed / len(futures)
+                completed
+                /
+                len(futures)
             )
 
     progress.empty()
 
-    technical = pd.DataFrame(results)
+    technical = pd.DataFrame(
+        results
+    )
 
     if technical.empty:
 
-        st.warning(
-            "No market data received."
+        st.error(
+            "No technical data received."
         )
 
         st.stop()
 
     st.info(
-        "Checking FII holdings..."
+        "Checking institutional holdings..."
     )
 
-    fii_results = []
+    holdings = []
 
     progress = st.progress(0)
 
@@ -315,91 +390,106 @@ if st.button(
 
         futures = {
             executor.submit(
-                get_fii_holding,
+                get_institutional_holding,
                 symbol
             ): symbol
-            for symbol in technical["Symbol"]
+            for symbol in technical[
+                "Symbol"
+            ]
         }
 
-        for future in as_completed(futures):
+        for future in as_completed(
+            futures
+        ):
 
-            symbol = futures[future]
+            symbol = futures[
+                future
+            ]
 
             try:
-                fii = future.result()
+                holding = future.result()
             except Exception:
-                fii = None
+                holding = np.nan
 
-            fii_results.append(
+            holdings.append(
                 {
                     "Symbol": symbol,
-                    "FII Holding": fii
+                    "Institutional Holding": holding
                 }
             )
 
             completed += 1
 
             progress.progress(
-                completed / len(futures)
+                completed
+                /
+                len(futures)
             )
 
     progress.empty()
 
-    fii_df = pd.DataFrame(fii_results)
+    holding_df = pd.DataFrame(
+        holdings
+    )
 
-    final = technical.merge(
-        fii_df,
+    df = technical.merge(
+        holding_df,
         on="Symbol",
         how="left"
     )
 
-    final["FII Holding"] = pd.to_numeric(
-        final["FII Holding"],
+    df[
+        "Institutional Holding"
+    ] = pd.to_numeric(
+        df[
+            "Institutional Holding"
+        ],
         errors="coerce"
     )
 
-    final = final[
-        (final["EMA Cross"] == True)
+    strict = df[
+        (df["EMA Cross Recent"] == True)
         &
-        (final["200 EMA Breakout"] == True)
+        (df["Above 200 EMA"] == True)
         &
-        (final["RSI"] > 50)
+        (df["20D Breakout"] == True)
         &
-        (final["High Momentum"] == True)
+        (df["RSI"] > 50)
         &
-        (final["FII Holding"] > FII_MIN)
+        (df["High Momentum"] == True)
+        &
+        (
+            df[
+                "Institutional Holding"
+            ] > 7
+        )
     ].copy()
 
-    final = final.sort_values(
-        "Momentum Score",
+    strict = strict.sort_values(
+        "Score",
         ascending=False
     )
 
-    if final.empty:
-
-        st.warning(
-            "No stocks match all conditions."
-        )
-
-    else:
-
-        final["Signal"] = np.select(
-            [
-                final["Momentum Score"] >= 90,
-                final["Momentum Score"] >= 75,
-                final["Momentum Score"] >= 60
-            ],
-            [
-                "STRONG MOMENTUM",
-                "BUY",
-                "WATCH"
-            ],
-            default="WEAK"
-        )
+    if not strict.empty:
 
         st.success(
-            str(len(final)) +
-            " stocks found."
+            str(len(strict))
+            +
+            " stocks match all conditions."
+        )
+
+        strict["Signal"] = np.select(
+            [
+                strict["Score"] >= 90,
+                strict["Score"] >= 75,
+                strict["Score"] >= 60
+            ],
+            [
+                "🔥 STRONG",
+                "🟢 BUY",
+                "🟡 WATCH"
+            ],
+            default="WEAK"
         )
 
         columns = [
@@ -411,18 +501,76 @@ if st.button(
             "RSI",
             "MACD",
             "Volume X",
-            "FII Holding",
-            "Momentum Score",
+            "Institutional Holding",
+            "Score",
             "Signal"
         ]
 
         st.dataframe(
-            final[columns],
+            strict[columns],
             use_container_width=True,
             hide_index=True
         )
 
-        csv = final[columns].to_csv(
+    else:
+
+        st.warning(
+            "No stock matches every condition today."
+        )
+
+        st.subheader(
+            "Top Momentum Near-Matches"
+        )
+
+        near = df[
+            (df["Above 200 EMA"] == True)
+            &
+            (df["RSI"] > 50)
+            &
+            (df["High Momentum"] == True)
+        ].copy()
+
+        near = near.sort_values(
+            "Score",
+            ascending=False
+        ).head(30)
+
+        if not near.empty:
+
+            columns = [
+                "Symbol",
+                "Price",
+                "EMA10",
+                "EMA50",
+                "EMA200",
+                "RSI",
+                "MACD",
+                "Volume X",
+                "Institutional Holding",
+                "Score"
+            ]
+
+            st.dataframe(
+                near[columns],
+                use_container_width=True,
+                hide_index=True
+            )
+
+        else:
+
+            st.info(
+                "No strong momentum stocks found."
+            )
+
+    download_df = (
+        strict
+        if not strict.empty
+        else near
+    )
+
+    if not download_df.empty:
+
+        csv = download_df.to_csv(
             index=False
         ).encode("utf-8")
 
@@ -437,5 +585,10 @@ if st.button(
 else:
 
     st.info(
-        "Press SCAN ALL NSE STOCKS to start."
+        "Press SCAN NSE to start."
     )
+requirements.txt
+streamlit
+pandas
+numpy
+yfinance
