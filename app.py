@@ -1,5 +1,3 @@
-Bilkul. Neeche sirf code blocks hain. Har block ke andar jo hai wahi copy karna hai.
-app.py
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -15,6 +13,11 @@ st.set_page_config(
 st.title("NSE AI Stock Scanner")
 st.caption("EMA + MACD + RSI + ROE + FII + DII + 4 Month High")
 
+ROE_MIN = 10.0
+FII_MIN = 7.0
+DII_MIN = 45.0
+RSI_MIN = 50.0
+
 
 @st.cache_data(ttl=86400)
 def get_nse_stocks():
@@ -22,6 +25,7 @@ def get_nse_stocks():
 
     try:
         df = pd.read_csv(url)
+
         return (
             df["SYMBOL"]
             .dropna()
@@ -30,14 +34,28 @@ def get_nse_stocks():
             .unique()
             .tolist()
         )
+
     except Exception:
         return [
-            "RELIANCE", "TCS", "INFY", "HDFCBANK",
-            "ICICIBANK", "SBIN", "LT", "AXISBANK",
-            "KOTAKBANK", "ITC", "BHARTIARTL",
-            "MARUTI", "SUNPHARMA", "M&M",
-            "TATAMOTORS", "TATASTEEL", "HINDALCO",
-            "NTPC", "POWERGRID"
+            "RELIANCE",
+            "TCS",
+            "INFY",
+            "HDFCBANK",
+            "ICICIBANK",
+            "SBIN",
+            "LT",
+            "AXISBANK",
+            "KOTAKBANK",
+            "ITC",
+            "BHARTIARTL",
+            "MARUTI",
+            "SUNPHARMA",
+            "M&M",
+            "TATAMOTORS",
+            "TATASTEEL",
+            "HINDALCO",
+            "NTPC",
+            "POWERGRID"
         ]
 
 
@@ -144,7 +162,8 @@ def scan_stock(symbol):
 
         ema_cross = (
             yesterday["EMA10"] <= yesterday["EMA50"]
-            and today["EMA10"] > today["EMA50"]
+            and
+            today["EMA10"] > today["EMA50"]
         )
 
         return {
@@ -160,7 +179,7 @@ def scan_stock(symbol):
             "EMA Cross": ema_cross,
             "Above 200 EMA": price > ema200,
             "MACD Bullish": macd > macd_signal,
-            "RSI > 50": rsi > 50,
+            "RSI > 50": rsi > RSI_MIN,
             "4M Breakout": price >= high4m * 0.995
         }
 
@@ -186,13 +205,13 @@ def calculate_score(row):
     if row["4M Breakout"]:
         score += 15
 
-    if row["ROE"] > 10:
+    if row["ROE"] > ROE_MIN:
         score += 5
 
-    if row["FII Holding"] > 7:
+    if row["FII Holding"] > FII_MIN:
         score += 10
 
-    if row["DII Holding"] > 45:
+    if row["DII Holding"] > DII_MIN:
         score += 5
 
     return score
@@ -259,10 +278,10 @@ if uploaded_file is not None:
             for column in required
         ):
             st.error(
-                "CSV columns must be: "
-                "symbol, roe, fii_holding, dii_holding"
+                "CSV columns must be: symbol, roe, fii_holding, dii_holding"
             )
             fundamentals = None
+
         else:
             fundamentals["symbol"] = (
                 fundamentals["symbol"]
@@ -444,17 +463,3 @@ else:
     st.info(
         "Upload fundamentals.csv and click RUN NSE SCANNER."
     )
-requirements.txt
-streamlit
-pandas
-numpy
-yfinance
-fundamentals.csv
-symbol,roe,fii_holding,dii_holding
-RELIANCE,12.5,18.2,38.5
-TCS,45.2,12.8,35.1
-INFY,29.4,15.6,32.7
-HDFCBANK,17.1,24.3,28.6
-ICICIBANK,18.9,22.1,31.4
-Ab GitHub me purana app.py poora delete karke pehla code poora paste karo. requirements.txt me doosra code, aur fundamentals.csv me teesra code.
-Phir Commit changes → Streamlit → Reboot app.
