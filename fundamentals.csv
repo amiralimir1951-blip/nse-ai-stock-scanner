@@ -1,0 +1,5 @@
+nse-ai-scanner
+│
+├── app.py
+├── requirements.txt
+└── fundamentals.csv
