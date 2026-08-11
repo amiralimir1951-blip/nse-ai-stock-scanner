@@ -1,4 +1,3 @@
-app.py
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -11,16 +10,10 @@ st.set_page_config(
     layout="wide"
 )
 
-st.title("🚀 NSE FII Momentum Scanner")
-
-st.write(
-    "10 EMA Cross 50 EMA | Fresh 200 EMA Breakout | "
-    "RSI > 50 | High Momentum | FII > 7%"
-)
+st.title("NSE FII Momentum Scanner")
+st.write("10 EMA > 50 EMA | Fresh 200 EMA Breakout | RSI > 50 | High Momentum | FII > 7%")
 
 FII_MIN = 7.0
-RSI_MIN = 50.0
-VOLUME_MIN = 1.5
 
 
 @st.cache_data(ttl=86400)
@@ -42,22 +35,6 @@ def get_nse_symbols():
 
     except Exception:
         return []
-
-
-def get_fii_holding(symbol):
-    try:
-        ticker = yf.Ticker(symbol + ".NS")
-        info = ticker.info
-
-        fii = info.get("heldPercentInstitutions")
-
-        if fii is None:
-            return None
-
-        return float(fii) * 100
-
-    except Exception:
-        return None
 
 
 def calculate_indicators(df):
@@ -162,9 +139,7 @@ def scan_stock(symbol):
         volume = float(today["Volume"])
         avg_volume = float(today["VOL20"])
 
-        previous_high = float(
-            today["HIGH20"]
-        )
+        previous_high = float(today["HIGH20"])
 
         if avg_volume <= 0:
             return None
@@ -193,7 +168,7 @@ def scan_stock(symbol):
         high_momentum = (
             price > ema10
             and rsi >= 55
-            and volume_ratio >= VOLUME_MIN
+            and volume_ratio >= 1.5
             and macd_bullish
         )
 
@@ -244,15 +219,37 @@ def scan_stock(symbol):
         return None
 
 
+def get_fii_holding(symbol):
+
+    try:
+
+        ticker = yf.Ticker(symbol + ".NS")
+        info = ticker.info
+
+        value = info.get("heldPercentInstitutions")
+
+        if value is None:
+            return None
+
+        return float(value) * 100
+
+    except Exception:
+        return None
+
+
 if st.button(
-    "🚀 SCAN ALL NSE STOCKS",
+    "SCAN ALL NSE STOCKS",
     use_container_width=True
 ):
 
     symbols = get_nse_symbols()
 
     if not symbols:
-        st.error("NSE stock list could not be loaded.")
+
+        st.error(
+            "Unable to load NSE stock list."
+        )
+
         st.stop()
 
     st.info(
@@ -292,19 +289,23 @@ if st.button(
 
     progress.empty()
 
-    df = pd.DataFrame(results)
+    technical = pd.DataFrame(results)
 
-    if df.empty:
-        st.warning("No market data received.")
+    if technical.empty:
+
+        st.warning(
+            "No market data received."
+        )
+
         st.stop()
 
     st.info(
-        "Checking FII holding..."
+        "Checking FII holdings..."
     )
 
     fii_results = []
 
-    fii_progress = st.progress(0)
+    progress = st.progress(0)
 
     completed = 0
 
@@ -317,7 +318,7 @@ if st.button(
                 get_fii_holding,
                 symbol
             ): symbol
-            for symbol in df["Symbol"]
+            for symbol in technical["Symbol"]
         }
 
         for future in as_completed(futures):
@@ -338,35 +339,35 @@ if st.button(
 
             completed += 1
 
-            fii_progress.progress(
+            progress.progress(
                 completed / len(futures)
             )
 
-    fii_progress.empty()
+    progress.empty()
 
     fii_df = pd.DataFrame(fii_results)
 
-    df = df.merge(
+    final = technical.merge(
         fii_df,
         on="Symbol",
         how="left"
     )
 
-    df["FII Holding"] = pd.to_numeric(
-        df["FII Holding"],
+    final["FII Holding"] = pd.to_numeric(
+        final["FII Holding"],
         errors="coerce"
     )
 
-    final = df[
-        (df["EMA Cross"] == True)
+    final = final[
+        (final["EMA Cross"] == True)
         &
-        (df["200 EMA Breakout"] == True)
+        (final["200 EMA Breakout"] == True)
         &
-        (df["RSI"] > RSI_MIN)
+        (final["RSI"] > 50)
         &
-        (df["High Momentum"] == True)
+        (final["High Momentum"] == True)
         &
-        (df["FII Holding"] > FII_MIN)
+        (final["FII Holding"] > FII_MIN)
     ].copy()
 
     final = final.sort_values(
@@ -377,7 +378,7 @@ if st.button(
     if final.empty:
 
         st.warning(
-            "No stocks currently match all conditions."
+            "No stocks match all conditions."
         )
 
     else:
@@ -389,16 +390,16 @@ if st.button(
                 final["Momentum Score"] >= 60
             ],
             [
-                "🔥 STRONG MOMENTUM",
-                "🟢 BUY",
-                "🟡 WATCH"
+                "STRONG MOMENTUM",
+                "BUY",
+                "WATCH"
             ],
             default="WEAK"
         )
 
         st.success(
             str(len(final)) +
-            " high-momentum stocks found."
+            " stocks found."
         )
 
         columns = [
@@ -438,8 +439,3 @@ else:
     st.info(
         "Press SCAN ALL NSE STOCKS to start."
     )
-requirements.txt
-streamlit
-pandas
-numpy
-yfinance
